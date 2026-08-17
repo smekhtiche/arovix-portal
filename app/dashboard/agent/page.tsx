@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import { inviteUserAction } from "@/app/actions/auth-actions";
 
 export default function AgentDashboard() {
 const router = useRouter();
@@ -10,28 +11,39 @@ const supabase = createClient();
 
 const [partners, setPartners] = useState<any[]>([]);
 const [loading, setLoading] = useState(true);
-const [currentAgentEmail, setCurrentAgentEmail] = useState<string>("");
+const [currentAgentEmail, setCurrentAgentEmail] = useState("");
+const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
 
-// حقول نموذج إنشاء الشريك
+// Partner creation
 const [shopName, setShopName] = useState("");
 const [shopEmail, setShopEmail] = useState("");
 const [tier, setTier] = useState("Standard");
 const [commission, setCommission] = useState("10");
 const [successMsg, setSuccessMsg] = useState("");
 const [searchTerm, setSearchTerm] = useState("");
+const [creatingPartner, setCreatingPartner] = useState(false);
 
-// حالات الـ Modals
+// Modals
 const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+
+// Manual invitation
 const [inviteEmailInput, setInviteEmailInput] = useState("");
 const [inviting, setInviting] = useState(false);
+
+// ============================================================
+// LOAD AGENT + PARTNERS
+// ============================================================
 
 useEffect(() => {
 async function fetchAgentDataAndPartners() {
 try {
 setLoading(true);
 
-const { data: { user }, error: authError } = await supabase.auth.getUser();
+const {
+data: { user },
+error: authError,
+} = await supabase.auth.getUser();
 
 if (authError || !user || !user.email) {
 router.replace("/login");
@@ -40,18 +52,60 @@ return;
 
 setCurrentAgentEmail(user.email);
 
-const { data, error } = await supabase
+// IMPORTANT:
+// agents.id is the real database Agent ID.
+// partners.agent_id stores this ID.
+const {
+data: agentData,
+error: agentError,
+} = await supabase
+.from("agents")
+.select("id, email, name")
+.eq("email", user.email)
+.maybeSingle();
+
+if (agentError) {
+throw agentError;
+}
+
+if (!agentData) {
+throw new Error(
+"Your Agent account is not linked to an Agent record."
+);
+}
+
+setCurrentAgentId(String(agentData.id));
+
+// Load only partners assigned to this Agent.
+const {
+data,
+error,
+} = await supabase
 .from("partners")
 .select("*, business_shops(*)")
-.eq("agent_id", user.email);
+.eq("agent_id", String(agentData.id))
+.order("created_at", {
+ascending: false,
+});
 
 if (error) {
-console.error("Error fetching agent partners:", error.message);
-} else if (data) {
-setPartners(data);
+console.error(
+"Error fetching agent partners:",
+error.message
+);
+} else {
+setPartners(data || []);
 }
-} catch (err) {
-console.error("Unexpected error:", err);
+} catch (err: any) {
+console.error(
+"Unexpected Agent Dashboard error:",
+err
+);
+
+alert(
+err?.message ||
+"Failed to load Agent Dashboard."
+);
 } finally {
 setLoading(false);
 }
@@ -60,270 +114,691 @@ setLoading(false);
 fetchAgentDataAndPartners();
 }, [router, supabase]);
 
-const handleCreatePartner = async (e: React.FormEvent) => {
+// ============================================================
+// CREATE PARTNER
+// ============================================================
+
+const handleCreatePartner = async (
+e: React.FormEvent
+) => {
 e.preventDefault();
+
+if (creatingPartner) {
+return;
+}
+
+setCreatingPartner(true);
+setSuccessMsg("");
+
 try {
-const customPartnerId = `AROVIX-AGENCY-${Date.now().toString().slice(-4)}`;
-const shopIdValue = `SHOP-${Date.now().toString().slice(-4)}`;
+if (!currentAgentId) {
+throw new Error(
+"Agent account is not properly configured."
+);
+}
 
-const { error: rpcError } = await supabase.rpc("create_partner_with_shop", {
-p_partner_id: customPartnerId,
-p_company_name: shopName,
-p_email: shopEmail,
-p_partner_type: "agency",
-p_tier: tier,
-p_commission: Number(commission),
-p_status: "Active",
-p_shop_id: shopIdValue,
-p_shop_name: `${shopName} Shop`,
-p_business_credit: 0,
-p_agent_id: currentAgentEmail,
-});
+if (!shopName.trim()) {
+throw new Error(
+"Partner name is required."
+);
+}
 
-if (rpcError) throw rpcError;
+if (!shopEmail.trim()) {
+throw new Error(
+"Partner email is required."
+);
+}
 
-setSuccessMsg("Partner created successfully!");
+const requestedCommission =
+Number(commission);
+
+if (
+!Number.isFinite(
+requestedCommission
+) ||
+requestedCommission < 0
+) {
+throw new Error(
+"Commission must be a valid percentage."
+);
+}
+
+// Agent-created Partners:
+// maximum commission = 10%.
+const partnerCommission =
+Math.min(
+requestedCommission,
+10
+);
+
+const timestamp =
+Date.now()
+.toString()
+.slice(-4);
+
+const customPartnerId =
+`AROVIX-AGENCY-${timestamp}`;
+
+const shopIdValue =
+`SHOP-${timestamp}`;
+
+// ----------------------------------------------------------
+// 1. CREATE PARTNER + BUSINESS SHOP
+// ----------------------------------------------------------
+
+const {
+error: rpcError,
+} = await supabase.rpc(
+"create_partner_with_shop",
+{
+p_partner_id:
+customPartnerId,
+
+p_company_name:
+shopName.trim(),
+
+p_email:
+shopEmail
+.trim()
+.toLowerCase(),
+
+p_partner_type:
+"agency",
+
+p_tier:
+tier,
+
+p_commission:
+partnerCommission,
+
+p_status:
+"Active",
+
+p_shop_id:
+shopIdValue,
+
+p_shop_name:
+`${shopName.trim()} Shop`,
+
+p_business_credit:
+0,
+
+// IMPORTANT:
+// Use the real Agent database ID.
+p_agent_id:
+currentAgentId,
+}
+);
+
+if (rpcError) {
+throw rpcError;
+}
+
+// ----------------------------------------------------------
+// 2. SEND PARTNER INVITATION
+// ----------------------------------------------------------
+
+const inviteResult =
+await inviteUserAction(
+shopEmail
+.trim()
+.toLowerCase(),
+"agency",
+{
+role: "agency",
+company_name:
+shopName.trim(),
+partner_email:
+shopEmail
+.trim()
+.toLowerCase(),
+}
+);
+
+if (!inviteResult.success) {
+throw new Error(
+inviteResult.error ||
+"Partner was created, but the invitation could not be sent."
+);
+}
+
+// ----------------------------------------------------------
+// 3. SUCCESS
+// ----------------------------------------------------------
+
+setSuccessMsg(
+`Partner "${shopName.trim()}" created successfully and invitation sent.`
+);
+
 setShopName("");
 setShopEmail("");
 setTier("Standard");
 setCommission("10");
 
+// Close only after the complete operation succeeds.
 setTimeout(() => {
 setIsCreateModalOpen(false);
+setSuccessMsg("");
 window.location.reload();
 }, 1500);
 } catch (err: any) {
-console.error("Error creating partner:", err);
-alert("Error: " + err.message);
+console.error(
+"Error creating Partner:",
+err
+);
+
+alert(
+"Error: " +
+(err?.message ||
+"Failed to create Partner.")
+);
+} finally {
+setCreatingPartner(false);
 }
 };
 
-// دالة إرسال الدعوة برابط إعادة التعيين
-const handleSendInvite = async (e: React.FormEvent) => {
+// ============================================================
+// MANUAL PARTNER INVITATION
+// ============================================================
+
+const handleSendInvite = async (
+e: React.FormEvent
+) => {
 e.preventDefault();
-if (!inviteEmailInput) return;
+
+const cleanEmail =
+inviteEmailInput
+.trim()
+.toLowerCase();
+
+if (!cleanEmail || inviting) {
+return;
+}
 
 try {
 setInviting(true);
-const { error } = await supabase.auth.resetPasswordForEmail(inviteEmailInput, {
-redirectTo: `${window.location.origin}/auth/update-password`,
-});
 
-if (error) throw error;
+const inviteResult =
+await inviteUserAction(
+cleanEmail,
+"agency",
+{
+role: "agency",
+partner_email:
+cleanEmail,
+}
+);
 
-alert(`Invitation link successfully sent to: ${inviteEmailInput}`);
+if (!inviteResult.success) {
+throw new Error(
+inviteResult.error ||
+"Failed to send invitation."
+);
+}
+
+alert(
+`Invitation sent successfully to: ${cleanEmail}`
+);
+
 setInviteEmailInput("");
 setIsInviteModalOpen(false);
 } catch (err: any) {
-console.error("Error sending invite:", err);
-alert("Failed to send invitation link: " + err.message);
+console.error(
+"Error sending Partner invitation:",
+err
+);
+
+alert(
+"Failed to send invitation: " +
+(err?.message ||
+"Unknown error.")
+);
 } finally {
 setInviting(false);
 }
 };
 
-const filteredPartners = partners.filter((p) =>
-p.company_name?.toLowerCase().includes(searchTerm.toLowerCase())
+// ============================================================
+// FILTER
+// ============================================================
+
+const filteredPartners =
+partners.filter((p) =>
+p.company_name
+?.toLowerCase()
+.includes(
+searchTerm.toLowerCase()
+)
 );
 
-const totalPartnersCount = partners.length;
-const totalCreditSum = partners.reduce((acc, p) => {
-const shopRecord = Array.isArray(p.business_shops) ? p.business_shops[0] : p.business_shops;
-return acc + (shopRecord?.business_credit ?? 0);
-}, 0);
+// ============================================================
+// STATS
+// ============================================================
+
+const totalPartnersCount =
+partners.length;
+
+const totalCreditSum =
+partners.reduce(
+(acc, p) => {
+const shopRecord =
+Array.isArray(
+p.business_shops
+)
+? p.business_shops[0]
+: p.business_shops;
+
+return (
+acc +
+Number(
+shopRecord?.business_credit ||
+0
+)
+);
+},
+0
+);
+
+// ============================================================
+// UI
+// ============================================================
 
 return (
 <div className="min-h-screen bg-[#02030a] text-white p-6 md:p-8 font-mono relative">
 <div className="max-w-7xl mx-auto">
 
-{/* Header مع زرين في الأعلى بشكل مرتب */}
+{/* HEADER */}
+
 <div className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-4">
+
 <div>
-<h1 className="text-2xl font-bold text-white">Agent Dashboard</h1>
+<h1 className="text-2xl font-bold text-white">
+Agent Dashboard
+</h1>
+
 <p className="text-sm text-slate-400 mt-1">
-Logged in as: <span className="text-[#31dfff] font-bold">{currentAgentEmail || "Loading..."}</span>
+Logged in as:{" "}
+<span className="text-[#31dfff] font-bold">
+{currentAgentEmail ||
+"Loading..."}
+</span>
 </p>
 </div>
 
 <div className="flex items-center gap-3">
+
 <button
-onClick={() => setIsInviteModalOpen(true)}
-className="bg-slate-800 hover:bg-slate-700 text-[#31dfff] border border-slate-700 font-bold px-4 py-2.5 rounded-xl text-sm transition flex items-center gap-2 cursor-pointer"
+type="button"
+onClick={() =>
+setIsInviteModalOpen(true)
+}
+disabled={inviting}
+className="bg-slate-800 hover:bg-slate-700 text-[#31dfff] border border-slate-700 font-bold px-4 py-2.5 rounded-xl text-sm transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
 >
-<span>✉️</span> Invite Partner
+<span>✉️</span>
+Invite Partner
 </button>
+
 <button
-onClick={() => setIsCreateModalOpen(true)}
-className="bg-gradient-to-r from-[#31dfff] to-blue-600 text-slate-950 font-bold px-5 py-2.5 rounded-xl text-sm shadow-lg hover:opacity-90 transition flex items-center gap-2 cursor-pointer"
+type="button"
+onClick={() => {
+setSuccessMsg("");
+setIsCreateModalOpen(true);
+}}
+disabled={creatingPartner}
+className="bg-gradient-to-r from-[#31dfff] to-blue-600 text-slate-950 font-bold px-5 py-2.5 rounded-xl text-sm shadow-lg hover:opacity-90 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
 >
-<span>➕</span> Create New Partner
+<span>➕</span>
+Create New Partner
 </button>
+
 </div>
 </div>
 
-{/* Stats Grid */}
+{/* STATS */}
+
 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+
 <div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">Total Partners</div>
-<div className="text-2xl font-bold text-white">{totalPartnersCount}</div>
+<div className="text-xs text-slate-400 uppercase font-medium mb-1">
+Total Partners
 </div>
-<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">Total Credit Balance</div>
-<div className="text-2xl font-bold text-emerald-400">${totalCreditSum.toFixed(2)}</div>
-</div>
-<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">Total Sales</div>
-<div className="text-2xl font-bold text-[#31dfff]">$0.00</div>
-</div>
-<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">Total Commission</div>
-<div className="text-2xl font-bold text-amber-400">$0.00</div>
+
+<div className="text-2xl font-bold text-white">
+{totalPartnersCount}
 </div>
 </div>
 
-{/* Partners Table Section */}
+<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
+<div className="text-xs text-slate-400 uppercase font-medium mb-1">
+Total Credit Balance
+</div>
+
+<div className="text-2xl font-bold text-emerald-400">
+${totalCreditSum.toFixed(2)}
+</div>
+</div>
+
+<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
+<div className="text-xs text-slate-400 uppercase font-medium mb-1">
+Total Sales
+</div>
+
+<div className="text-2xl font-bold text-[#31dfff]">
+$0.00
+</div>
+</div>
+
+<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
+<div className="text-xs text-slate-400 uppercase font-medium mb-1">
+Total Commission
+</div>
+
+<div className="text-2xl font-bold text-amber-400">
+$0.00
+</div>
+</div>
+
+</div>
+
+{/* PARTNERS TABLE */}
+
 <div className="bg-[#0b0e1a] p-6 rounded-xl border border-slate-800">
+
 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-<h2 className="text-lg font-bold text-white">Your Assigned Partners & Performance</h2>
+
+<h2 className="text-lg font-bold text-white">
+Your Assigned Partners & Performance
+</h2>
+
 <input
 type="text"
 placeholder="Search partners..."
 className="bg-[#02030a] border border-slate-700 px-3 py-1.5 rounded-lg text-sm text-white focus:outline-none focus:border-[#31dfff]"
 value={searchTerm}
-onChange={(e) => setSearchTerm(e.target.value)}
+onChange={(e) =>
+setSearchTerm(
+e.target.value
+)
+}
 />
+
 </div>
 
 {loading ? (
-<div className="text-center py-12 text-slate-400">Loading partners...</div>
+<div className="text-center py-12 text-slate-400">
+Loading partners...
+</div>
 ) : (
 <div className="overflow-x-auto">
+
 <table className="w-full text-left text-sm text-slate-300">
+
 <thead className="bg-[#02030a] text-xs uppercase text-slate-400">
+
 <tr>
-<th className="py-3 px-3">Partner</th>
-<th className="py-3 px-3">Credit</th>
-<th className="py-3 px-3">Tier / Comm</th>
-<th className="py-3 px-3">Status</th>
-<th className="py-3 px-3">Actions</th>
+<th className="py-3 px-3">
+Partner
+</th>
+
+<th className="py-3 px-3">
+Credit
+</th>
+
+<th className="py-3 px-3">
+Tier / Comm
+</th>
+
+<th className="py-3 px-3">
+Status
+</th>
+
+<th className="py-3 px-3">
+Actions
+</th>
 </tr>
+
 </thead>
+
 <tbody>
-{filteredPartners.length > 0 ? (
-filteredPartners.map((p) => {
-const shopRecord = Array.isArray(p.business_shops) ? p.business_shops[0] : p.business_shops;
-const creditVal = shopRecord?.business_credit ?? 0;
+
+{filteredPartners.length >
+0 ? (
+filteredPartners.map(
+(p) => {
+const shopRecord =
+Array.isArray(
+p.business_shops
+)
+? p.business_shops[0]
+: p.business_shops;
+
+const creditVal =
+shopRecord?.business_credit ??
+0;
 
 return (
-<tr key={p.id} className="border-b border-slate-800">
+<tr
+key={p.id}
+className="border-b border-slate-800"
+>
+
 <td className="py-3 px-3">
-<div className="font-bold text-white">{p.company_name}</div>
-<div className="text-xs text-slate-500">{p.email}</div>
+
+<div className="font-bold text-white">
+{p.company_name}
+</div>
+
+<div className="text-xs text-slate-500">
+{p.email}
+</div>
+
 </td>
-<td className="py-3 px-3 font-bold text-emerald-400">${Number(creditVal).toFixed(2)}</td>
-<td className="py-3 px-3">
-<span className="bg-slate-800 px-2 py-1 rounded text-xs">{p.tier || "Standard"}</span>
-<span className="ml-2 text-amber-400 font-bold text-xs">{p.commission}%</span>
+
+<td className="py-3 px-3 font-bold text-emerald-400">
+$
+{Number(
+creditVal
+).toFixed(2)}
 </td>
+
 <td className="py-3 px-3">
-<span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-xs">
-{p.status || "Active"}
+
+<span className="bg-slate-800 px-2 py-1 rounded text-xs">
+{p.tier ||
+"Standard"}
 </span>
+
+<span className="ml-2 text-amber-400 font-bold text-xs">
+{p.commission}%
+</span>
+
 </td>
+
 <td className="py-3 px-3">
+
+<span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-xs">
+{p.status ||
+"Active"}
+</span>
+
+</td>
+
+<td className="py-3 px-3">
+
 <button
-onClick={() => router.push(`/dashboard/agent/partners/${p.id}`)}
+type="button"
+onClick={() =>
+router.push(
+`/dashboard/agent/partners/${p.id}`
+)
+}
 className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs text-white transition cursor-pointer"
 >
 View Details
 </button>
+
 </td>
+
 </tr>
 );
-})
+}
+)
 ) : (
 <tr>
-<td colSpan={5} className="text-center py-8 text-slate-500">
+<td
+colSpan={5}
+className="text-center py-8 text-slate-500"
+>
 No partners assigned to you yet. Use "Create New Partner" or "Invite Partner" above.
 </td>
 </tr>
 )}
+
 </tbody>
+
 </table>
+
 </div>
 )}
-</div>
 
 </div>
 
-{/* Modal إرسال الدعوة المنفصل */}
+</div>
+
+{/* ======================================================
+INVITE PARTNER MODAL
+====================================================== */}
+
 {isInviteModalOpen && (
 <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+
 <div className="bg-[#0c0f1d] border border-white/10 rounded-2xl p-6 md:p-8 max-w-md w-full shadow-2xl">
+
 <div className="flex justify-between items-center mb-4">
-<h2 className="text-lg font-bold text-[#31dfff]">Send Partner Invitation</h2>
+
+<h2 className="text-lg font-bold text-[#31dfff]">
+Send Partner Invitation
+</h2>
+
 <button
-onClick={() => setIsInviteModalOpen(false)}
-className="text-slate-400 hover:text-white text-lg font-bold cursor-pointer"
+type="button"
+onClick={() =>
+setIsInviteModalOpen(false)
+}
+disabled={inviting}
+className="text-slate-400 hover:text-white text-lg font-bold cursor-pointer disabled:opacity-50"
 >
 ✕
 </button>
+
 </div>
 
 <p className="text-xs text-slate-400 mb-6">
-Enter the partner's email address to send them a password setup and login link. You can resend this anytime if needed.
+Enter the partner's email address to send an AROVIX invitation and password setup link.
 </p>
 
-<form onSubmit={handleSendInvite} className="flex flex-col gap-4">
+<form
+onSubmit={
+handleSendInvite
+}
+className="flex flex-col gap-4"
+>
+
 <div>
-<label className="text-xs text-slate-400 block mb-1">Partner Email Address</label>
+
+<label className="text-xs text-slate-400 block mb-1">
+Partner Email Address
+</label>
+
 <input
 type="email"
 required
-className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff]"
-value={inviteEmailInput}
-onChange={(e) => setInviteEmailInput(e.target.value)}
+disabled={inviting}
+className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
+value={
+inviteEmailInput
+}
+onChange={(e) =>
+setInviteEmailInput(
+e.target.value
+)
+}
 placeholder="partner@example.com"
 />
+
 </div>
 
 <div className="flex gap-3 mt-4">
+
 <button
 type="button"
-onClick={() => setIsInviteModalOpen(false)}
-className="w-1/2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition text-sm cursor-pointer"
+onClick={() => {
+setIsInviteModalOpen(
+false
+);
+setInviteEmailInput(
+""
+);
+}}
+disabled={inviting}
+className="w-1/2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition text-sm cursor-pointer disabled:opacity-50"
 >
 Cancel
 </button>
+
 <button
 type="submit"
-disabled={inviting}
+disabled={
+inviting ||
+!inviteEmailInput.trim()
+}
 className="w-1/2 bg-gradient-to-r from-[#31dfff] to-blue-600 text-slate-950 font-bold py-2.5 rounded-xl hover:opacity-90 transition text-sm shadow-lg cursor-pointer disabled:opacity-50"
 >
-{inviting ? "Sending..." : "Send Invite"}
+{inviting
+? "Sending..."
+: "Send Invite"}
 </button>
+
 </div>
+
 </form>
+
 </div>
+
 </div>
 )}
 
-{/* Modal إنشاء الشريك (المستويات الأربعة: Standard, Silver, Gold, Elite) */}
+{/* ======================================================
+CREATE PARTNER MODAL
+====================================================== */}
+
 {isCreateModalOpen && (
 <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+
 <div className="bg-[#0c0f1d] border border-white/10 rounded-2xl p-6 md:p-8 max-w-md w-full shadow-2xl">
+
 <div className="flex justify-between items-center mb-4">
-<h2 className="text-lg font-bold text-[#31dfff]">Create New Partner</h2>
+
+<h2 className="text-lg font-bold text-[#31dfff]">
+Create New Partner
+</h2>
+
 <button
-onClick={() => setIsCreateModalOpen(false)}
-className="text-slate-400 hover:text-white text-lg font-bold cursor-pointer"
+type="button"
+onClick={() =>
+setIsCreateModalOpen(false)
+}
+disabled={creatingPartner}
+className="text-slate-400 hover:text-white text-lg font-bold cursor-pointer disabled:opacity-50"
 >
 ✕
 </button>
+
 </div>
 
 <p className="text-xs text-slate-400 mb-6">
-Fill in the partner details, select tier, and commission percentage.
+Fill in the partner details. Agents can assign a maximum 10% commission to Partners.
 </p>
 
 {successMsg && (
@@ -332,81 +807,185 @@ Fill in the partner details, select tier, and commission percentage.
 </div>
 )}
 
-<form onSubmit={handleCreatePartner} className="flex flex-col gap-4">
+<form
+onSubmit={
+handleCreatePartner
+}
+className="flex flex-col gap-4"
+>
+
 <div>
-<label className="text-xs text-slate-400 block mb-1">Company / Partner Name</label>
+
+<label className="text-xs text-slate-400 block mb-1">
+Company / Partner Name
+</label>
+
 <input
 type="text"
 required
-className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff]"
+disabled={creatingPartner}
+className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
 value={shopName}
-onChange={(e) => setShopName(e.target.value)}
+onChange={(e) =>
+setShopName(
+e.target.value
+)
+}
 placeholder="e.g. Arovix Store"
 />
+
 </div>
 
 <div>
-<label className="text-xs text-slate-400 block mb-1">Partner Email Address</label>
+
+<label className="text-xs text-slate-400 block mb-1">
+Partner Email Address
+</label>
+
 <input
 type="email"
 required
-className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff]"
+disabled={creatingPartner}
+className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
 value={shopEmail}
-onChange={(e) => setShopEmail(e.target.value)}
+onChange={(e) =>
+setShopEmail(
+e.target.value
+)
+}
 placeholder="partner@example.com"
 />
+
 </div>
 
 <div className="grid grid-cols-2 gap-3">
+
 <div>
-<label className="text-xs text-slate-400 block mb-1">Tier</label>
+
+<label className="text-xs text-slate-400 block mb-1">
+Tier
+</label>
+
 <select
-className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff]"
+disabled={creatingPartner}
+className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
 value={tier}
-onChange={(e) => setTier(e.target.value)}
+onChange={(e) =>
+setTier(
+e.target.value
+)
+}
 >
-<option value="Standard">Standard</option>
-<option value="Silver">Silver</option>
-<option value="Gold">Gold</option>
-<option value="Elite">Elite</option>
+<option value="Standard">
+Standard
+</option>
+
+<option value="Silver">
+Silver
+</option>
+
+<option value="Gold">
+Gold
+</option>
+
+<option value="Elite">
+Elite
+</option>
 </select>
+
 </div>
 
 <div>
-<label className="text-xs text-slate-400 block mb-1">Commission (%)</label>
+
+<label className="text-xs text-slate-400 block mb-1">
+Commission (%)
+</label>
+
 <input
 type="number"
 required
 min="0"
-max="100"
-className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff]"
+max="10"
+disabled={creatingPartner}
+className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
 value={commission}
-onChange={(e) => setCommission(e.target.value)}
-placeholder="10"
+onChange={(e) => {
+const value =
+Number(
+e.target.value
+);
+
+if (
+Number.isNaN(
+value
+)
+) {
+setCommission(
+"0"
+);
+return;
+}
+
+setCommission(
+String(
+Math.min(
+10,
+Math.max(
+0,
+value
+)
+)
+)
+);
+}}
 />
+
+<p className="text-[10px] text-slate-500 mt-1">
+Agent maximum: 10%
+</p>
+
 </div>
+
 </div>
 
 <div className="flex gap-3 mt-4">
+
 <button
 type="button"
-onClick={() => setIsCreateModalOpen(false)}
-className="w-1/2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition text-sm cursor-pointer"
+onClick={() =>
+setIsCreateModalOpen(
+false
+)
+}
+disabled={creatingPartner}
+className="w-1/2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition text-sm cursor-pointer disabled:opacity-50"
 >
 Cancel
 </button>
+
 <button
 type="submit"
-className="w-1/2 bg-gradient-to-r from-[#31dfff] to-blue-600 text-slate-950 font-bold py-2.5 rounded-xl hover:opacity-90 transition text-sm shadow-lg cursor-pointer"
+disabled={
+creatingPartner ||
+!shopName.trim() ||
+!shopEmail.trim()
+}
+className="w-1/2 bg-gradient-to-r from-[#31dfff] to-blue-600 text-slate-950 font-bold py-2.5 rounded-xl hover:opacity-90 transition text-sm shadow-lg cursor-pointer disabled:opacity-50"
 >
-Create Partner
+{creatingPartner
+? "Creating..."
+: "Create Partner"}
 </button>
+
 </div>
+
 </form>
+
 </div>
+
 </div>
 )}
+
 </div>
 );
 }
-
