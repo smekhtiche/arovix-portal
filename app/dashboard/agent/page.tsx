@@ -5,14 +5,32 @@ import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { inviteUserAction } from "@/app/actions/auth-actions";
 
+type AgentEarning = {
+agent_id?: string;
+shop_id?: string;
+amount?: number | string;
+created_at?: string;
+order_reference?: string;
+sales_amount?: number | string;
+commission_rate?: number | string;
+transaction_id?: string;
+updated_at?: string;
+};
+
 export default function AgentDashboard() {
 const router = useRouter();
 const supabase = createClient();
 
 const [partners, setPartners] = useState<any[]>([]);
 const [loading, setLoading] = useState(true);
+
 const [currentAgentEmail, setCurrentAgentEmail] = useState("");
 const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
+const [currentAgentName, setCurrentAgentName] = useState("");
+
+// Agent Earnings
+const [agentEarnings, setAgentEarnings] = useState<AgentEarning[]>([]);
+const [earningsLoading, setEarningsLoading] = useState(false);
 
 // Partner creation
 const [shopName, setShopName] = useState("");
@@ -32,10 +50,65 @@ const [inviteEmailInput, setInviteEmailInput] = useState("");
 const [inviting, setInviting] = useState(false);
 
 // ============================================================
+// AGENT EARNINGS WEBHOOK
+// ============================================================
+
+const loadAgentEarnings = async (agentId: string) => {
+if (!agentId) {
+return;
+}
+
+try {
+setEarningsLoading(true);
+
+const webhookUrl =
+"https://arovix-esim.app.n8n.cloud/webhook/agent-earnings";
+
+const response = await fetch(
+`${webhookUrl}?agentId=${encodeURIComponent(agentId)}`,
+{
+method: "GET",
+cache: "no-store",
+}
+);
+
+if (!response.ok) {
+throw new Error(
+`Agent earnings request failed: ${response.status}`
+);
+}
+
+const result = await response.json();
+
+console.log("AROVIX Agent Earnings:", result);
+
+const earnings =
+Array.isArray(result?.earnings)
+? result.earnings
+: [];
+
+setAgentEarnings(
+earnings as AgentEarning[]
+);
+} catch (error) {
+console.error(
+"Agent earnings loading error:",
+error
+);
+
+setAgentEarnings([]);
+} finally {
+setEarningsLoading(false);
+}
+};
+
+// ============================================================
 // LOAD AGENT + PARTNERS
 // ============================================================
 
 useEffect(() => {
+let mounted = true;
+
 async function fetchAgentDataAndPartners() {
 try {
 setLoading(true);
@@ -45,8 +118,16 @@ data: { user },
 error: authError,
 } = await supabase.auth.getUser();
 
-if (authError || !user || !user.email) {
+if (
+authError ||
+!user ||
+!user.email
+) {
 router.replace("/login");
+return;
+}
+
+if (!mounted) {
 return;
 }
 
@@ -60,7 +141,7 @@ data: agentData,
 error: agentError,
 } = await supabase
 .from("agents")
-.select("id, email, name")
+.select("id, email, name, commission")
 .eq("email", user.email)
 .maybeSingle();
 
@@ -74,44 +155,87 @@ throw new Error(
 );
 }
 
-setCurrentAgentId(String(agentData.id));
+const realAgentId =
+String(agentData.id);
 
-// Load only partners assigned to this Agent.
+if (!mounted) {
+return;
+}
+
+setCurrentAgentId(
+realAgentId
+);
+
+setCurrentAgentName(
+agentData.name ||
+"Agent"
+);
+
+// --------------------------------------------------------
+// LOAD ONLY PARTNERS ASSIGNED TO THIS AGENT
+// --------------------------------------------------------
+
 const {
 data,
 error,
 } = await supabase
 .from("partners")
-.select("*, business_shops(*)")
-.eq("agent_id", String(agentData.id))
-.order("created_at", {
+.select(
+"*, business_shops(*)"
+)
+.eq(
+"agent_id",
+realAgentId
+)
+.order(
+"created_at",
+{
 ascending: false,
-});
+}
+);
 
 if (error) {
 console.error(
 "Error fetching agent partners:",
 error.message
 );
-} else {
-setPartners(data || []);
+} else if (mounted) {
+setPartners(
+data || []
+);
 }
+
+// --------------------------------------------------------
+// LOAD AGENT EARNINGS
+// --------------------------------------------------------
+
+await loadAgentEarnings(
+realAgentId
+);
 } catch (err: any) {
 console.error(
 "Unexpected Agent Dashboard error:",
 err
 );
 
+if (mounted) {
 alert(
 err?.message ||
 "Failed to load Agent Dashboard."
 );
+}
 } finally {
+if (mounted) {
 setLoading(false);
+}
 }
 }
 
 fetchAgentDataAndPartners();
+
+return () => {
+mounted = false;
+};
 }, [router, supabase]);
 
 // ============================================================
@@ -163,8 +287,8 @@ throw new Error(
 );
 }
 
-// Agent-created Partners:
-// maximum commission = 10%.
+// Keep the existing Agent Partner
+// creation rule exactly as it was.
 const partnerCommission =
 Math.min(
 requestedCommission,
@@ -275,7 +399,6 @@ setShopEmail("");
 setTier("Standard");
 setCommission("10");
 
-// Close only after the complete operation succeeds.
 setTimeout(() => {
 setIsCreateModalOpen(false);
 setSuccessMsg("");
@@ -372,7 +495,7 @@ searchTerm.toLowerCase()
 );
 
 // ============================================================
-// STATS
+// PARTNER STATS
 // ============================================================
 
 const totalPartnersCount =
@@ -400,6 +523,39 @@ shopRecord?.business_credit ||
 );
 
 // ============================================================
+// REAL AGENT EARNINGS
+// ============================================================
+
+const totalAgentSales =
+agentEarnings.reduce(
+(total, earning) =>
+total +
+Number(
+earning.sales_amount || 0
+),
+0
+);
+
+const totalAgentCommission =
+agentEarnings.reduce(
+(total, earning) =>
+total +
+Number(
+earning.amount || 0
+),
+0
+);
+
+const latestCommissionRate =
+agentEarnings.length > 0
+? Number(
+agentEarnings[
+agentEarnings.length - 1
+]?.commission_rate || 0
+)
+: 0;
+
+// ============================================================
 // UI
 // ============================================================
 
@@ -423,6 +579,15 @@ Logged in as:{" "}
 "Loading..."}
 </span>
 </p>
+
+{currentAgentName && (
+<p className="text-xs text-slate-500 mt-1">
+Agent:{" "}
+<span className="text-slate-300">
+{currentAgentName}
+</span>
+</p>
+)}
 </div>
 
 <div className="flex items-center gap-3">
@@ -457,46 +622,170 @@ Create New Partner
 
 {/* STATS */}
 
-<div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
 
-<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">
+{/* TOTAL PARTNERS */}
+
+<div className="bg-gradient-to-br from-[#0b0e1a] to-[#10152a] p-5 rounded-2xl border border-slate-800 shadow-xl min-h-[142px] flex flex-col justify-between">
+
+<div className="flex items-start justify-between gap-3">
+
+<div>
+<div className="text-xs text-slate-400 uppercase font-medium mb-2">
 Total Partners
 </div>
 
-<div className="text-2xl font-bold text-white">
+<div className="text-3xl font-black text-white">
 {totalPartnersCount}
 </div>
 </div>
 
-<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">
+<div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+🤝
+</div>
+
+</div>
+
+<div className="text-[10px] text-slate-500">
+Partners assigned to you
+</div>
+
+</div>
+
+{/* TOTAL CREDIT */}
+
+<div className="bg-gradient-to-br from-[#0b0e1a] to-[#10152a] p-5 rounded-2xl border border-emerald-500/20 shadow-xl min-h-[142px] flex flex-col justify-between">
+
+<div className="flex items-start justify-between gap-3">
+
+<div>
+<div className="text-xs text-slate-400 uppercase font-medium mb-2">
 Total Credit Balance
 </div>
 
-<div className="text-2xl font-bold text-emerald-400">
+<div className="text-3xl font-black text-emerald-400">
 ${totalCreditSum.toFixed(2)}
 </div>
 </div>
 
-<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">
+<div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+💳
+</div>
+
+</div>
+
+<div className="text-[10px] text-slate-500">
+Current partner credit
+</div>
+
+</div>
+
+{/* TOTAL SALES */}
+
+<div className="bg-gradient-to-br from-[#0b0e1a] to-[#10152a] p-5 rounded-2xl border border-cyan-500/20 shadow-xl min-h-[142px] flex flex-col justify-between">
+
+<div className="flex items-start justify-between gap-3">
+
+<div>
+<div className="text-xs text-slate-400 uppercase font-medium mb-2">
 Total Sales
 </div>
 
-<div className="text-2xl font-bold text-[#31dfff]">
-$0.00
+<div className="text-3xl font-black text-[#31dfff]">
+$
+{totalAgentSales.toFixed(
+2
+)}
 </div>
 </div>
 
-<div className="bg-[#0b0e1a] p-4 rounded-xl border border-slate-800">
-<div className="text-xs text-slate-400 uppercase font-medium mb-1">
-Total Commission
+<div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
+📊
 </div>
 
-<div className="text-2xl font-bold text-amber-400">
-$0.00
 </div>
+
+<div className="text-[10px] text-slate-500">
+Partner sales generating your earnings
+</div>
+
+</div>
+
+{/* AGENT COMMISSION */}
+
+<div className="bg-gradient-to-br from-[#0b0e1a] to-[#10152a] p-5 rounded-2xl border border-amber-500/30 shadow-xl min-h-[142px] flex flex-col justify-between">
+
+<div className="flex items-start justify-between gap-3">
+
+<div>
+<div className="text-xs text-slate-400 uppercase font-medium mb-2">
+Agent Commission
+</div>
+
+<div className="text-3xl font-black text-amber-400">
+$
+{totalAgentCommission.toFixed(
+2
+)}
+</div>
+</div>
+
+<div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+💰
+</div>
+
+</div>
+
+<div className="text-[10px] text-slate-500">
+{earningsLoading
+? "Loading earnings..."
+: `Your earned commission${
+latestCommissionRate > 0
+? ` • ${latestCommissionRate}%`
+: ""
+}`}
+</div>
+
+</div>
+
+</div>
+
+{/* EARNINGS SUMMARY */}
+
+<div className="bg-gradient-to-br from-[#0b0e1a] to-[#070812] border border-amber-500/20 rounded-2xl p-5 mb-8 shadow-xl">
+
+<div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+
+<div>
+
+<div className="flex items-center gap-2">
+
+<div className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+
+<h2 className="text-sm font-bold text-white uppercase tracking-wider">
+Agent Earnings
+</h2>
+
+</div>
+
+<p className="text-xs text-slate-400 mt-2">
+Your earnings are recorded automatically when an assigned Partner completes an eSIM sale.
+</p>
+
+</div>
+
+<div className="text-right">
+
+<div className="text-[10px] text-slate-500 uppercase">
+Recorded Transactions
+</div>
+
+<div className="text-lg font-bold text-amber-400">
+{agentEarnings.length}
+</div>
+
+</div>
+
 </div>
 
 </div>
@@ -537,6 +826,7 @@ Loading partners...
 <thead className="bg-[#02030a] text-xs uppercase text-slate-400">
 
 <tr>
+
 <th className="py-3 px-3">
 Partner
 </th>
@@ -556,16 +846,17 @@ Status
 <th className="py-3 px-3">
 Actions
 </th>
+
 </tr>
 
 </thead>
 
 <tbody>
 
-{filteredPartners.length >
-0 ? (
+{filteredPartners.length > 0 ? (
 filteredPartners.map(
 (p) => {
+
 const shopRecord =
 Array.isArray(
 p.business_shops
@@ -646,12 +937,14 @@ View Details
 )
 ) : (
 <tr>
+
 <td
 colSpan={5}
 className="text-center py-8 text-slate-500"
 >
 No partners assigned to you yet. Use "Create New Partner" or "Invite Partner" above.
 </td>
+
 </tr>
 )}
 
@@ -684,7 +977,9 @@ Send Partner Invitation
 <button
 type="button"
 onClick={() =>
-setIsInviteModalOpen(false)
+setIsInviteModalOpen(
+false
+)
 }
 disabled={inviting}
 className="text-slate-400 hover:text-white text-lg font-bold cursor-pointer disabled:opacity-50"
@@ -787,7 +1082,9 @@ Create New Partner
 <button
 type="button"
 onClick={() =>
-setIsCreateModalOpen(false)
+setIsCreateModalOpen(
+false
+)
 }
 disabled={creatingPartner}
 className="text-slate-400 hover:text-white text-lg font-bold cursor-pointer disabled:opacity-50"
@@ -876,6 +1173,7 @@ e.target.value
 )
 }
 >
+
 <option value="Standard">
 Standard
 </option>
@@ -891,6 +1189,7 @@ Gold
 <option value="Elite">
 Elite
 </option>
+
 </select>
 
 </div>
