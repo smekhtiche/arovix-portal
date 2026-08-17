@@ -13,21 +13,29 @@ const [errorMsg, setErrorMsg] = useState("");
 
 const handleResetRequest = async (e: React.FormEvent) => {
 e.preventDefault();
+
 setLoading(true);
 setMessage("");
 setErrorMsg("");
 
 try {
-const { error } = await supabase.auth.resetPasswordForEmail(email, {
-redirectTo: `${window.location.origin}/update-password`,
+const { error } =
+await supabase.auth.resetPasswordForEmail(email, {
+redirectTo: `${window.location.origin}/auth/callback`,
 });
 
 if (error) throw error;
 
-setMessage("Password reset link has been sent to your email address.");
+setMessage(
+"Password reset link has been sent to your email address."
+);
 } catch (err: any) {
 console.error("Reset password error:", err);
-setErrorMsg(err.message || "Failed to send reset link. Please try again.");
+
+setErrorMsg(
+err.message ||
+"Failed to send reset link. Please try again."
+);
 } finally {
 setLoading(false);
 }
@@ -37,8 +45,13 @@ return (
 <div className="min-h-screen bg-[#02030a] text-white flex items-center justify-center p-6">
 <div className="max-w-md w-full bg-[#0b0e1a] p-8 rounded-2xl border border-slate-800 shadow-xl">
 <div className="text-center mb-8">
-<h1 className="text-2xl font-bold text-white mb-2">Reset Password</h1>
-<p className="text-sm text-slate-400">Enter your email to receive a recovery link</p>
+<h1 className="text-2xl font-bold text-white mb-2">
+Reset Password
+</h1>
+
+<p className="text-sm text-slate-400">
+Enter your email to receive a recovery link
+</p>
 </div>
 
 {message && (
@@ -53,9 +66,15 @@ return (
 </div>
 )}
 
-<form onSubmit={handleResetRequest} className="flex flex-col gap-4">
+<form
+onSubmit={handleResetRequest}
+className="flex flex-col gap-4"
+>
 <div>
-<label className="text-xs text-slate-400 block mb-1 font-medium">Email Address</label>
+<label className="text-xs text-slate-400 block mb-1 font-medium">
+Email Address
+</label>
+
 <input
 type="email"
 required
@@ -71,12 +90,17 @@ type="submit"
 disabled={loading}
 className="mt-2 w-full bg-[#31dfff] text-[#02030a] font-bold py-3 rounded-xl hover:opacity-90 transition text-sm disabled:opacity-50"
 >
-{loading ? "Sending link..." : "Send Reset Link"}
+{loading
+? "Sending link..."
+: "Send Reset Link"}
 </button>
 </form>
 
 <div className="mt-6 text-center">
-<Link href="/login" className="text-xs text-slate-400 hover:text-white transition">
+<Link
+href="/login"
+className="text-xs text-slate-400 hover:text-white transition"
+>
 ← Back to Sign In
 </Link>
 </div>
@@ -84,4 +108,3 @@ className="mt-2 w-full bg-[#31dfff] text-[#02030a] font-bold py-3 rounded-xl hov
 </div>
 );
 }
-
