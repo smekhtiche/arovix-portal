@@ -4,206 +4,229 @@ import { useState } from "react";
 import { inviteUserAction } from "@/app/actions/auth-actions";
 
 export default function InviteModal() {
-const [isOpen, setIsOpen] = useState(false);
-const [email, setEmail] = useState("");
-const [role, setRole] =
-useState<"agent" | "partner">("agent");
-const [loading, setLoading] = useState(false);
-const [message, setMessage] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [role, setRole] =
+    useState<"agent" | "partner">("agent");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
 
-const handleInvite = async (
-e: React.FormEvent
-) => {
-e.preventDefault();
+  const handleInvite = async (
+    e: React.FormEvent
+  ) => {
+    e.preventDefault();
 
-setLoading(true);
-setMessage("");
+    if (loading) return;
 
-try {
-/*
---------------------------------------------------------
-PARTNER → agency
-AGENT → agent
+    setLoading(true);
+    setMessage("");
 
-Keep the existing auth-actions contract.
---------------------------------------------------------
-*/
+    try {
+      /*
+      --------------------------------------------------------
+      PARTNER → agency
+      AGENT → agent
 
-const selectedRole =
-role === "partner"
-? "agency"
-: "agent";
+      Keep the existing auth-actions contract.
+      --------------------------------------------------------
+      */
 
-const res =
-await inviteUserAction(
-email.trim().toLowerCase(),
-selectedRole,
-{}
-);
+      const selectedRole =
+        role === "partner"
+          ? "agency"
+          : "agent";
 
-if (res.success) {
-setMessage(
-"Invitation sent successfully!"
-);
+      const res =
+        await inviteUserAction(
+          email.trim().toLowerCase(),
+          selectedRole,
+          {}
+        );
 
-setEmail("");
-} else {
-setMessage(
-`Error: ${res.error}`
-);
-}
-} catch (error: any) {
-console.error(
-"Invitation error:",
-error
-);
+      if (res.success) {
+        setMessage(
+          "Invitation sent successfully!"
+        );
 
-setMessage(
-`Error: ${
-error?.message ||
-"Failed to send invitation."
-}`
-);
-} finally {
-setLoading(false);
-}
-};
+        setEmail("");
 
-return (
-<div>
-{/* Trigger Button */}
+        /*
+        ------------------------------------------------------
+        CLOSE MODAL AFTER SUCCESS
+        ------------------------------------------------------
+        Show the success message briefly, then close the
+        invitation window automatically.
+        ------------------------------------------------------
+        */
 
-<button
-onClick={() =>
-setIsOpen(true)
-}
-className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition"
->
-+ Invite New User
-</button>
+        setTimeout(() => {
+          setIsOpen(false);
+          setMessage("");
+          setLoading(false);
+        }, 1200);
 
-{/* Modal */}
+        return;
+      }
 
-{isOpen && (
-<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      setMessage(
+        `Error: ${res.error}`
+      );
+    } catch (error: any) {
+      console.error(
+        "Invitation error:",
+        error
+      );
 
-<div className="bg-white p-6 rounded-lg w-96 shadow-xl relative text-black">
+      setMessage(
+        `Error: ${
+          error?.message ||
+          "Failed to send invitation."
+        }`
+      );
+    } finally {
+      /*
+      Do not immediately set loading=false after
+      successful invitation because the success message
+      needs to remain visible until the modal closes.
+      */
+      if (!message) {
+        setLoading(false);
+      }
+    }
+  };
 
-<h3 className="text-lg font-bold mb-4">
-Send New Invitation
-</h3>
+  return (
+    <div>
+      {/* Trigger Button */}
 
-<form
-onSubmit={
-handleInvite
-}
-className="space-y-4"
->
+      <button
+        type="button"
+        onClick={() => {
+          setIsOpen(true);
+          setMessage("");
+        }}
+        className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition"
+      >
+        + Invite New User
+      </button>
 
-{/* Email */}
+      {/* Modal */}
 
-<div>
-<label className="block text-sm font-medium mb-1">
-Email Address
-</label>
+      {isOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg w-96 shadow-xl relative text-black">
 
-<input
-type="email"
-required
-value={email}
-onChange={(e) =>
-setEmail(
-e.target.value
-)
-}
-className="w-full border rounded p-2 text-sm"
-placeholder="name@example.com"
-disabled={loading}
-/>
-</div>
+            <h3 className="text-lg font-bold mb-4">
+              Send New Invitation
+            </h3>
 
-{/* Role */}
+            <form
+              onSubmit={handleInvite}
+              className="space-y-4"
+            >
+              {/* Email */}
 
-<div>
-<label className="block text-sm font-medium mb-1">
-Role
-</label>
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Email Address
+                </label>
 
-<select
-value={role}
-onChange={(e) =>
-setRole(
-e.target.value as
-| "agent"
-| "partner"
-)
-}
-className="w-full border rounded p-2 text-sm"
-disabled={loading}
->
-<option value="agent">
-Agent
-</option>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) =>
+                    setEmail(e.target.value)
+                  }
+                  className="w-full border rounded p-2 text-sm"
+                  placeholder="name@example.com"
+                  disabled={loading}
+                />
+              </div>
 
-<option value="partner">
-Partner
-</option>
-</select>
-</div>
+              {/* Role */}
 
-{/* Message */}
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Role
+                </label>
 
-{message && (
-<p
-className={`text-xs ${
-message.includes(
-"successfully"
-)
-? "text-green-600"
-: "text-red-600"
-}`}
->
-{message}
-</p>
-)}
+                <select
+                  value={role}
+                  onChange={(e) =>
+                    setRole(
+                      e.target.value as
+                        | "agent"
+                        | "partner"
+                    )
+                  }
+                  className="w-full border rounded p-2 text-sm"
+                  disabled={loading}
+                >
+                  <option value="agent">
+                    Agent
+                  </option>
 
-{/* Buttons */}
+                  <option value="partner">
+                    Partner
+                  </option>
+                </select>
+              </div>
 
-<div className="flex justify-end space-x-2 space-x-reverse pt-2">
+              {/* Message */}
 
-<button
-type="button"
-onClick={() => {
-setIsOpen(false);
-setMessage("");
-}}
-disabled={loading}
-className="bg-gray-300 text-gray-800 px-3 py-1.5 rounded text-sm disabled:opacity-50"
->
-Cancel
-</button>
+              {message && (
+                <p
+                  className={`text-xs ${
+                    message.includes(
+                      "successfully"
+                    )
+                      ? "text-green-600"
+                      : "text-red-600"
+                  }`}
+                >
+                  {message}
+                </p>
+              )}
 
-<button
-type="submit"
-disabled={
-loading ||
-!email.trim()
-}
-className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-700 disabled:opacity-50"
->
-{loading
-? "Sending..."
-: "Send Invite"}
-</button>
+              {/* Buttons */}
 
-</div>
+              <div className="flex justify-end space-x-2 space-x-reverse pt-2">
 
-</form>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (loading) return;
 
-</div>
+                    setIsOpen(false);
+                    setMessage("");
+                    setEmail("");
+                  }}
+                  disabled={loading}
+                  className="bg-gray-300 text-gray-800 px-3 py-1.5 rounded text-sm disabled:opacity-50"
+                >
+                  Cancel
+                </button>
 
-</div>
-)}
-</div>
-);
+                <button
+                  type="submit"
+                  disabled={
+                    loading ||
+                    !email.trim()
+                  }
+                  className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {loading
+                    ? "Sending..."
+                    : "Send Invite"}
+                </button>
+
+              </div>
+            </form>
+
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

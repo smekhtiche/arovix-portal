@@ -633,6 +633,20 @@ activeShop?.shop_id ||
 
 /*
 ============================================================
+COMMISSION DISPLAY
+============================================================
+*/
+
+const commissionValue =
+Number(activePartner?.commission);
+
+const commissionDisplay =
+Number.isFinite(commissionValue)
+? `${commissionValue}%`
+: "—";
+
+/*
+============================================================
 DASHBOARD STATS
 ============================================================
 */
@@ -696,6 +710,26 @@ valueColor:
 
 note:
 "Connected globally",
+},
+
+{
+label:
+"Commission",
+
+value:
+commissionDisplay,
+
+icon:
+"💰",
+
+borderColor:
+"border-amber-500/40",
+
+valueColor:
+"text-amber-300",
+
+note:
+"Current partner commission",
 },
 
 {
@@ -798,7 +832,7 @@ Account Email
 
 {/* STATS */}
 
-<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
 
 {stats.map(
 (stat) => (
