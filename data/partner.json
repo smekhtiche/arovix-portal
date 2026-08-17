@@ -1,0 +1,13 @@
+{
+    "partnerId": "partner-001",
+    "companyName": "AROVIX Demo Partner",
+    "businessCredit": 500,
+    "currency": "USD",
+    "todayOrders": 0,
+    "activeEsims": 0,
+    "revenue": 0,
+    "totalTransactions": 0,
+    "orders": [],
+    "transactions": []
+    }
+    

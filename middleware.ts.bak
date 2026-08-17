@@ -1,0 +1,50 @@
+import { type NextRequest, NextResponse } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
+
+export async function middleware(request: NextRequest) {
+let supabaseResponse = NextResponse.next({
+request,
+})
+
+const supabase = createServerClient(
+'https://srowvekjljygehaeeyas.supabase.co',
+'sb_publishable_R1FPIKK4Mb6r-WCcFCnZng_DdcOy1Sc', // ضع مفتاحك الكامل هنا كما فعلنا في ملف الـ client
+{
+cookies: {
+getAll() {
+return request.cookies.getAll()
+},
+setAll(cookiesToSet) {
+cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+supabaseResponse = NextResponse.next({
+request,
+})
+cookiesToSet.forEach(({ name, value, options }) =>
+supabaseResponse.cookies.set(name, value, options)
+)
+},
+},
+}
+)
+
+// تحديث الجلسة لتجنب انتهاء صلاحيتها
+const {
+data: { user },
+} = await supabase.auth.getUser()
+
+// حماية المسارات: إذا لم يكن مسجل دخول وحاول دخول الداشبورد، يتم تحويله لصفحة تسجيل الدخول
+if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
+const url = request.nextUrl.clone()
+url.pathname = '/login'
+return NextResponse.redirect(url)
+}
+
+return supabaseResponse
+}
+
+export const config = {
+matcher: [
+'/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+],
+}
+
