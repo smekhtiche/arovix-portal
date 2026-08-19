@@ -1,24 +1,49 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
+import { createClient as createSupabaseAdmin } from "@supabase/supabase-js";
 
 export async function proxy(request: NextRequest) {
+console.log(
+"AROVIX PROXY RUNNING:",
+request.nextUrl.pathname
+);
+
 let supabaseResponse = NextResponse.next({
 request,
 });
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl =
+process.env.NEXT_PUBLIC_SUPABASE_URL;
 
-if (!supabaseUrl || !supabaseAnonKey || !serviceRoleKey) {
-console.error("AROVIX PROXY: Missing Supabase environment variables.");
+const supabaseAnonKey =
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+const serviceRoleKey =
+process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (
+!supabaseUrl ||
+!supabaseAnonKey ||
+!serviceRoleKey
+) {
+console.error(
+"AROVIX PROXY: Supabase environment variables are missing."
+);
 
 return NextResponse.redirect(
-new URL("/login?error=configuration_error", request.url)
+new URL(
+"/login?error=configuration_error",
+request.url
+)
 );
 }
 
+/*
+* Browser/session client.
+*
+* This client is used ONLY to identify the authenticated
+* Supabase user from the user's session cookies.
+*/
 const supabase = createServerClient(
 supabaseUrl,
 supabaseAnonKey,
@@ -29,52 +54,65 @@ return request.cookies.getAll();
 },
 
 setAll(cookiesToSet) {
-cookiesToSet.forEach(({ name, value }) => {
-request.cookies.set(name, value);
-});
+cookiesToSet.forEach(
+({ name, value }) => {
+request.cookies.set(
+name,
+value
+);
+}
+);
 
-supabaseResponse = NextResponse.next({
+supabaseResponse =
+NextResponse.next({
 request,
 });
 
-cookiesToSet.forEach(({ name, value, options }) => {
-supabaseResponse.cookies.set(name, value, options);
-});
+cookiesToSet.forEach(
+({
+name,
+value,
+options,
+}) => {
+supabaseResponse.cookies.set(
+name,
+value,
+options
+);
+}
+);
 },
 },
 }
 );
 
-const pathname = request.nextUrl.pathname;
+const pathname =
+request.nextUrl.pathname;
 
-// ------------------------------------------------------------
-// PUBLIC ROUTES
-// ------------------------------------------------------------
+// ============================================================
+// 1. PUBLIC ROUTES
+// ============================================================
 
 const isPublicRoute =
 pathname === "/login" ||
 pathname.startsWith("/auth/") ||
-pathname.startsWith("/api/") ||
-pathname === "/forgot-password" ||
-pathname === "/update-password" ||
-pathname === "/agency/login" ||
-pathname === "/agency/update-password";
+pathname.startsWith("/api/");
 
 if (isPublicRoute) {
 return supabaseResponse;
 }
 
-// ------------------------------------------------------------
-// ONLY DASHBOARD ROUTES REQUIRE AUTHENTICATION
-// ------------------------------------------------------------
+// ============================================================
+// 2. ONLY DASHBOARD ROUTES REQUIRE AUTHENTICATION
+// ============================================================
 
 if (!pathname.startsWith("/dashboard")) {
 return supabaseResponse;
 }
 
-// ------------------------------------------------------------
-// GET AUTHENTICATED USER
-// ------------------------------------------------------------
+// ============================================================
+// 3. GET AUTHENTICATED USER
+// ============================================================
 
 const {
 data: { user },
@@ -87,21 +125,37 @@ user?.id || "NO USER",
 userError?.message || ""
 );
 
+// ============================================================
+// 4. NO AUTHENTICATED USER
+// ============================================================
+
 if (userError || !user) {
-const url = request.nextUrl.clone();
+const url =
+request.nextUrl.clone();
 
 url.pathname = "/login";
-url.searchParams.set("error", "unauthorized");
+url.searchParams.set(
+"error",
+"unauthorized"
+);
 
 return NextResponse.redirect(url);
 }
 
-// ------------------------------------------------------------
-// SERVER-SIDE ADMIN CLIENT
-// This bypasses profiles RLS.
-// ------------------------------------------------------------
+// ============================================================
+// 5. ADMIN DATABASE CLIENT
+//
+// IMPORTANT:
+// The profile lookup is performed with the Supabase
+// Service Role Key so RLS on profiles cannot incorrectly
+// make an existing profile appear to be missing.
+//
+// This key is SERVER-SIDE ONLY and is never exposed to
+// the browser.
+// ============================================================
 
-const adminSupabase = createClient(
+const supabaseAdmin =
+createSupabaseAdmin(
 supabaseUrl,
 serviceRoleKey,
 {
@@ -112,17 +166,17 @@ persistSession: false,
 }
 );
 
-// ------------------------------------------------------------
-// GET PROFILE USING AUTH UID
-// ------------------------------------------------------------
+// ============================================================
+// 6. GET PROFILE BY AUTH USER UID
+// ============================================================
 
 const {
 data: profile,
 error: profileError,
-} = await adminSupabase
+} = await supabaseAdmin
 .from("profiles")
 .select(
-"id, role, status, agent_id, partner_id, shop_id, company_name"
+"id, full_name, email, role, status, agent_id, partner_id, shop_id, company_name"
 )
 .eq("id", user.id)
 .maybeSingle();
@@ -131,8 +185,12 @@ console.log(
 "AROVIX PROXY PROFILE:",
 profile?.role || "NO PROFILE",
 profile?.status || "",
-profileError?.message || ""
+profile?.id || ""
 );
+
+// ============================================================
+// 7. PROFILE MUST EXIST
+// ============================================================
 
 if (profileError || !profile) {
 console.error(
@@ -140,7 +198,8 @@ console.error(
 profileError
 );
 
-const url = request.nextUrl.clone();
+const url =
+request.nextUrl.clone();
 
 url.pathname = "/login";
 url.searchParams.set(
@@ -151,21 +210,25 @@ url.searchParams.set(
 return NextResponse.redirect(url);
 }
 
-// ------------------------------------------------------------
-// NORMALIZE ROLE / STATUS
-// ------------------------------------------------------------
+// ============================================================
+// 8. NORMALIZE ROLE / STATUS
+// ============================================================
 
-const role = String(profile.role || "")
+const role = String(
+profile.role || ""
+)
 .trim()
 .toLowerCase();
 
-const status = String(profile.status || "")
+const status = String(
+profile.status || ""
+)
 .trim()
 .toLowerCase();
 
-// ------------------------------------------------------------
-// BLOCK INACTIVE ACCOUNTS
-// ------------------------------------------------------------
+// ============================================================
+// 9. BLOCK INACTIVE ACCOUNTS
+// ============================================================
 
 if (
 status === "inactive" ||
@@ -173,7 +236,8 @@ status === "suspended" ||
 status === "blocked" ||
 status === "disabled"
 ) {
-const url = request.nextUrl.clone();
+const url =
+request.nextUrl.clone();
 
 url.pathname = "/login";
 url.searchParams.set(
@@ -184,36 +248,41 @@ url.searchParams.set(
 return NextResponse.redirect(url);
 }
 
-// ------------------------------------------------------------
-// DETERMINE ALLOWED DASHBOARD
-// ------------------------------------------------------------
+// ============================================================
+// 10. DETERMINE ALLOWED DASHBOARD
+// ============================================================
 
-let allowedDashboard: string | null = null;
+let allowedDashboard: string | null =
+null;
 
 switch (role) {
 case "admin":
-allowedDashboard = "/dashboard/admin";
+allowedDashboard =
+"/dashboard/admin";
 break;
 
 case "agent":
-allowedDashboard = "/dashboard/agent";
+allowedDashboard =
+"/dashboard/agent";
 break;
 
 case "partner":
 case "agency":
-allowedDashboard = "/dashboard/agency";
+allowedDashboard =
+"/dashboard/agency";
 break;
 
 default:
 allowedDashboard = null;
 }
 
-// ------------------------------------------------------------
-// INVALID ROLE
-// ------------------------------------------------------------
+// ============================================================
+// 11. UNKNOWN ROLE
+// ============================================================
 
 if (!allowedDashboard) {
-const url = request.nextUrl.clone();
+const url =
+request.nextUrl.clone();
 
 url.pathname = "/login";
 url.searchParams.set(
@@ -224,9 +293,9 @@ url.searchParams.set(
 return NextResponse.redirect(url);
 }
 
-// ------------------------------------------------------------
-// GENERIC /dashboard
-// ------------------------------------------------------------
+// ============================================================
+// 12. GENERIC /dashboard
+// ============================================================
 
 if (
 pathname === "/dashboard" ||
@@ -240,12 +309,14 @@ request.url
 );
 }
 
-// ------------------------------------------------------------
-// ADMIN DASHBOARD
-// ------------------------------------------------------------
+// ============================================================
+// 13. ADMIN DASHBOARD
+// ============================================================
 
 if (
-pathname.startsWith("/dashboard/admin")
+pathname.startsWith(
+"/dashboard/admin"
+)
 ) {
 if (role !== "admin") {
 return NextResponse.redirect(
@@ -259,12 +330,14 @@ request.url
 return supabaseResponse;
 }
 
-// ------------------------------------------------------------
-// AGENT DASHBOARD
-// ------------------------------------------------------------
+// ============================================================
+// 14. AGENT DASHBOARD
+// ============================================================
 
 if (
-pathname.startsWith("/dashboard/agent")
+pathname.startsWith(
+"/dashboard/agent"
+)
 ) {
 if (role !== "agent") {
 return NextResponse.redirect(
@@ -276,7 +349,8 @@ request.url
 }
 
 if (!profile.agent_id) {
-const url = request.nextUrl.clone();
+const url =
+request.nextUrl.clone();
 
 url.pathname = "/login";
 url.searchParams.set(
@@ -290,12 +364,14 @@ return NextResponse.redirect(url);
 return supabaseResponse;
 }
 
-// ------------------------------------------------------------
-// AGENCY / PARTNER DASHBOARD
-// ------------------------------------------------------------
+// ============================================================
+// 15. AGENCY / PARTNER DASHBOARD
+// ============================================================
 
 if (
-pathname.startsWith("/dashboard/agency")
+pathname.startsWith(
+"/dashboard/agency"
+)
 ) {
 if (
 role !== "partner" &&
@@ -310,7 +386,8 @@ request.url
 }
 
 if (!profile.partner_id) {
-const url = request.nextUrl.clone();
+const url =
+request.nextUrl.clone();
 
 url.pathname = "/login";
 url.searchParams.set(
@@ -324,9 +401,9 @@ return NextResponse.redirect(url);
 return supabaseResponse;
 }
 
-// ------------------------------------------------------------
-// UNKNOWN DASHBOARD PATH
-// ------------------------------------------------------------
+// ============================================================
+// 16. UNKNOWN DASHBOARD PATH
+// ============================================================
 
 return NextResponse.redirect(
 new URL(
