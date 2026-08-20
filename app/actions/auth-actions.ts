@@ -31,18 +31,9 @@ process.env.NEXT_PUBLIC_SITE_URL ||
 const redirectTo =
 `${baseUrl.replace(/\/$/, "")}/auth/callback`;
 
-/*
-* ============================================================
-* 1. CREATE / INVITE THE SUPABASE AUTH USER
-* ============================================================
-*
-* IMPORTANT:
-* This creates ONLY the Auth user.
-*
-* It does NOT create a Partner.
-* The Partner has already been created by the
-* Admin Create Agency flow.
-*/
+// ============================================================
+// 1. CREATE / INVITE THE SUPABASE AUTH USER
+// ============================================================
 
 const {
 data: linkData,
@@ -72,26 +63,18 @@ throw new Error(
 
 const invitedUserId = linkData.user.id;
 
-/*
-* ============================================================
-* 2. LINK THE EXISTING PARTNER TO THE AUTH USER
-* ============================================================
-*
-* IMPORTANT:
-*
-* DO NOT INSERT A NEW PARTNER HERE.
-*
-* The Admin Dashboard has already created:
-*
-* Partner
-* +
-* Business Shop
-*
-* before this invitation is sent.
-*
-* We only attach the Supabase Auth user ID to that
-* existing Partner.
-*/
+// ============================================================
+// 2. LINK THE EXISTING RECORD
+// Partner OR Agent
+// ============================================================
+
+let partnerRecordId: string | null = null;
+let agentRecordId: string | null = null;
+let companyName: string | null = null;
+
+// ============================================================
+// AGENCY
+// ============================================================
 
 if (role === "agency") {
 const {
@@ -115,16 +98,13 @@ throw new Error(
 );
 }
 
-/*
-* Link the EXISTING Partner to the Auth user.
-*
-* No new Partner is created.
-* No Business Shop is created.
-* Existing credit and all existing Partner data remain untouched.
-*/
+// ----------------------------------------------------------
+// Link existing Partner to Supabase Auth user
+// ----------------------------------------------------------
 
-const { error: updatePartnerError } =
-await supabaseAdmin
+const {
+error: updatePartnerError,
+} = await supabaseAdmin
 .from("partners")
 .update({
 user_id: invitedUserId,
@@ -134,19 +114,92 @@ user_id: invitedUserId,
 if (updatePartnerError) {
 throw updatePartnerError;
 }
+
+partnerRecordId = existingPartner.id;
+companyName =
+existingPartner.company_name;
 }
 
-/*
-* ============================================================
-* 3. GET THE INVITATION TOKEN
-* ============================================================
-*
-* We intentionally use token_hash so the existing
-* /auth/callback flow can handle the invitation.
-*/
+// ============================================================
+// AGENT
+// ============================================================
+
+if (role === "agent") {
+const {
+data: existingAgent,
+error: existingAgentError,
+} = await supabaseAdmin
+.from("agents")
+.select(
+"id, email, name"
+)
+.eq("email", cleanEmail)
+.maybeSingle();
+
+if (existingAgentError) {
+throw existingAgentError;
+}
+
+if (!existingAgent) {
+throw new Error(
+`No existing Agent was found for ${cleanEmail}. Create the Agent first, then send the invitation.`
+);
+}
+
+// ----------------------------------------------------------
+// Save the REAL Agent table ID
+// ----------------------------------------------------------
+
+agentRecordId =
+existingAgent.id;
+}
+
+// ============================================================
+// 2b. CREATE / UPDATE PROFILE
+//
+// THIS IS THE IMPORTANT FIX.
+//
+// Agent:
+// profiles.agent_id -> agents.id
+//
+// Agency:
+// profiles.partner_id -> partners.id
+// ============================================================
+
+const {
+error: profileError,
+} = await supabaseAdmin
+.from("profiles")
+.upsert({
+id: invitedUserId,
+
+email: cleanEmail,
+
+role: role,
+
+status: "active",
+
+partner_id:
+partnerRecordId,
+
+agent_id:
+agentRecordId,
+
+company_name:
+companyName,
+});
+
+if (profileError) {
+throw profileError;
+}
+
+// ============================================================
+// 3. GET THE INVITATION TOKEN
+// ============================================================
 
 const hashedToken =
-linkData.properties.hashed_token;
+linkData.properties
+.hashed_token;
 
 if (!hashedToken) {
 throw new Error(
@@ -159,18 +212,20 @@ const inviteLink =
 hashedToken
 )}&type=invite`;
 
-/*
-* ============================================================
-* 4. SEND ONE INVITATION EMAIL
-* ============================================================
-*/
+// ============================================================
+// 4. SEND ONE INVITATION EMAIL
+// ============================================================
 
-const { error: resendError } =
-await resend.emails.send({
+const {
+error: resendError,
+} = await resend.emails.send({
 from: "Arovix <noreply@arovix.io>",
+
 to: cleanEmail,
+
 subject:
 "Welcome to AROVIX - Set your password",
+
 html: `
 <div
 style="
@@ -181,13 +236,17 @@ max-width: 600px;
 margin: 0 auto;
 "
 >
+
 <h2>Welcome to AROVIX</h2>
 
-<p>Your AROVIX account is ready.</p>
+<p>
+Your AROVIX account is ready.
+</p>
 
 <p>
-Please click the button below to set your
-password and access your dashboard:
+Please click the button below
+to set your password and access
+your dashboard:
 </p>
 
 <a
@@ -213,9 +272,10 @@ font-size: 12px;
 color: #777;
 "
 >
-If you did not request this invitation,
-please ignore this email.
+If you did not request this
+invitation, please ignore this email.
 </p>
+
 </div>
 `,
 });
@@ -224,18 +284,22 @@ if (resendError) {
 throw resendError;
 }
 
-/*
-* ============================================================
-* 5. SUCCESS
-* ============================================================
-*/
+// ============================================================
+// 5. SUCCESS
+// ============================================================
 
 return {
 success: true,
-message: "Invitation sent successfully!",
-userId: invitedUserId,
+
+message:
+"Invitation sent successfully!",
+
+userId:
+invitedUserId,
 };
+
 } catch (err: any) {
+
 console.error(
 "inviteUserAction error:",
 err
@@ -243,6 +307,7 @@ err
 
 return {
 success: false,
+
 error:
 err?.message ||
 "Failed to send invitation.",

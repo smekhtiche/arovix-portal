@@ -82,20 +82,13 @@ const result = await response.json();
 
 console.log("AROVIX Agent Earnings:", result);
 
-const earnings =
-Array.isArray(result?.earnings)
+const earnings = Array.isArray(result?.earnings)
 ? result.earnings
 : [];
 
-setAgentEarnings(
-earnings as AgentEarning[]
-);
+setAgentEarnings(earnings as AgentEarning[]);
 } catch (error) {
-console.error(
-"Agent earnings loading error:",
-error
-);
-
+console.error("Agent earnings loading error:", error);
 setAgentEarnings([]);
 } finally {
 setEarningsLoading(false);
@@ -113,16 +106,16 @@ async function fetchAgentDataAndPartners() {
 try {
 setLoading(true);
 
+// --------------------------------------------------------
+// 1. GET AUTHENTICATED USER
+// --------------------------------------------------------
+
 const {
 data: { user },
 error: authError,
 } = await supabase.auth.getUser();
 
-if (
-authError ||
-!user ||
-!user.email
-) {
+if (authError || !user || !user.email) {
 router.replace("/login");
 return;
 }
@@ -133,46 +126,154 @@ return;
 
 setCurrentAgentEmail(user.email);
 
+// --------------------------------------------------------
+// 2. SECURITY IDENTITY CHECK
+//
 // IMPORTANT:
-// agents.id is the real database Agent ID.
-// partners.agent_id stores this ID.
+//
+// Auth user.id
+// ↓
+// profiles.id
+// ↓
+// profiles.agent_id
+// ↓
+// agents.id
+//
+// We DO NOT identify the Agent by email anymore.
+// --------------------------------------------------------
+
+const authUserId = user.id;
+
+if (!authUserId) {
+throw new Error(
+"Authenticated account has no valid user ID."
+);
+}
+
+// --------------------------------------------------------
+// 3. FIND THE PROFILE USING AUTH UID
+// --------------------------------------------------------
+
+const {
+data: profileData,
+error: profileError,
+} = await supabase
+.from("profiles")
+.select("id, role, status, agent_id")
+.eq("id", authUserId)
+.maybeSingle();
+
+if (profileError) {
+console.error(
+"Agent profile loading error:",
+profileError
+);
+
+throw new Error(
+"Unable to verify the authenticated Agent profile."
+);
+}
+
+if (!profileData) {
+throw new Error(
+"No profile is linked to this authenticated account."
+);
+}
+
+// --------------------------------------------------------
+// 4. VERIFY PROFILE ROLE
+// --------------------------------------------------------
+
+const profileRole = String(
+profileData.role || ""
+)
+.trim()
+.toLowerCase();
+
+if (
+profileRole &&
+profileRole !== "agent"
+) {
+throw new Error(
+"This account is not authorized to access the Agent Dashboard."
+);
+}
+
+// --------------------------------------------------------
+// 5. GET THE REAL AGENT ID FROM PROFILE
+// --------------------------------------------------------
+
+if (
+profileData.agent_id === null ||
+profileData.agent_id === undefined ||
+String(profileData.agent_id).trim() === ""
+) {
+throw new Error(
+"Your account is not linked to an Agent record."
+);
+}
+
+const realAgentId = String(
+profileData.agent_id
+);
+
+// --------------------------------------------------------
+// 6. LOAD THE REAL AGENT RECORD
+//
+// IMPORTANT:
+// We now identify the Agent by agents.id.
+// We no longer use agents.email = user.email.
+// --------------------------------------------------------
+
 const {
 data: agentData,
 error: agentError,
 } = await supabase
 .from("agents")
-.select("id, email, name, commission")
-.eq("email", user.email)
+.select("id, email, name, commission, country, status")
+.eq("id", realAgentId)
 .maybeSingle();
 
 if (agentError) {
-throw agentError;
+console.error(
+"Agent record loading error:",
+agentError
+);
+
+throw new Error(
+"Unable to load the Agent record."
+);
 }
 
 if (!agentData) {
 throw new Error(
-"Your Agent account is not linked to an Agent record."
+"Your profile is not linked to a valid Agent record."
 );
 }
 
-const realAgentId =
-String(agentData.id);
+// --------------------------------------------------------
+// 7. SAVE REAL AGENT
+// --------------------------------------------------------
 
 if (!mounted) {
 return;
 }
 
 setCurrentAgentId(
-realAgentId
+String(agentData.id)
 );
 
 setCurrentAgentName(
-agentData.name ||
-"Agent"
+agentData.name || "Agent"
 );
 
 // --------------------------------------------------------
-// LOAD ONLY PARTNERS ASSIGNED TO THIS AGENT
+// 8. LOAD ONLY PARTNERS ASSIGNED TO THIS AGENT
+//
+// SECURITY RULE:
+//
+// Agent A → only partners where agent_id = Agent A ID
+// Agent B → only partners where agent_id = Agent B ID
 // --------------------------------------------------------
 
 const {
@@ -180,19 +281,11 @@ data,
 error,
 } = await supabase
 .from("partners")
-.select(
-"*, business_shops(*)"
-)
-.eq(
-"agent_id",
-realAgentId
-)
-.order(
-"created_at",
-{
+.select("*, business_shops(*)")
+.eq("agent_id", realAgentId)
+.order("created_at", {
 ascending: false,
-}
-);
+});
 
 if (error) {
 console.error(
@@ -200,13 +293,11 @@ console.error(
 error.message
 );
 } else if (mounted) {
-setPartners(
-data || []
-);
+setPartners(data || []);
 }
 
 // --------------------------------------------------------
-// LOAD AGENT EARNINGS
+// 9. LOAD AGENT EARNINGS
 // --------------------------------------------------------
 
 await loadAgentEarnings(
@@ -223,6 +314,8 @@ alert(
 err?.message ||
 "Failed to load Agent Dashboard."
 );
+
+router.replace("/login");
 }
 } finally {
 if (mounted) {
@@ -595,7 +688,9 @@ Agent:{" "}
 <button
 type="button"
 onClick={() =>
-setIsInviteModalOpen(true)
+setIsInviteModalOpen(
+true
+)
 }
 disabled={inviting}
 className="bg-slate-800 hover:bg-slate-700 text-[#31dfff] border border-slate-700 font-bold px-4 py-2.5 rounded-xl text-sm transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
@@ -608,7 +703,9 @@ Invite Partner
 type="button"
 onClick={() => {
 setSuccessMsg("");
-setIsCreateModalOpen(true);
+setIsCreateModalOpen(
+true
+);
 }}
 disabled={creatingPartner}
 className="bg-gradient-to-r from-[#31dfff] to-blue-600 text-slate-950 font-bold px-5 py-2.5 rounded-xl text-sm shadow-lg hover:opacity-90 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
@@ -740,7 +837,8 @@ $
 {earningsLoading
 ? "Loading earnings..."
 : `Your earned commission${
-latestCommissionRate > 0
+latestCommissionRate >
+0
 ? ` • ${latestCommissionRate}%`
 : ""
 }`}
@@ -1086,7 +1184,9 @@ setIsCreateModalOpen(
 false
 )
 }
-disabled={creatingPartner}
+disabled={
+creatingPartner
+}
 className="text-slate-400 hover:text-white text-lg font-bold cursor-pointer disabled:opacity-50"
 >
 ✕
@@ -1120,7 +1220,9 @@ Company / Partner Name
 <input
 type="text"
 required
-disabled={creatingPartner}
+disabled={
+creatingPartner
+}
 className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
 value={shopName}
 onChange={(e) =>
@@ -1142,7 +1244,9 @@ Partner Email Address
 <input
 type="email"
 required
-disabled={creatingPartner}
+disabled={
+creatingPartner
+}
 className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
 value={shopEmail}
 onChange={(e) =>
@@ -1164,7 +1268,9 @@ Tier
 </label>
 
 <select
-disabled={creatingPartner}
+disabled={
+creatingPartner
+}
 className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
 value={tier}
 onChange={(e) =>
@@ -1205,9 +1311,13 @@ type="number"
 required
 min="0"
 max="10"
-disabled={creatingPartner}
+disabled={
+creatingPartner
+}
 className="w-full bg-[#02030a] border border-slate-700 px-3 py-2.5 rounded-xl text-sm text-white focus:outline-none focus:border-[#31dfff] disabled:opacity-50"
-value={commission}
+value={
+commission
+}
 onChange={(e) => {
 const value =
 Number(
@@ -1256,7 +1366,9 @@ setIsCreateModalOpen(
 false
 )
 }
-disabled={creatingPartner}
+disabled={
+creatingPartner
+}
 className="w-1/2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition text-sm cursor-pointer disabled:opacity-50"
 >
 Cancel

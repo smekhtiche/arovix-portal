@@ -1,50 +1,370 @@
-import { type NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
+import { type NextRequest, NextResponse } from "next/server";
+import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(request: NextRequest) {
+const pathname = request.nextUrl.pathname;
+
+console.log("AROVIX MIDDLEWARE RUNNING:", pathname);
+
 let supabaseResponse = NextResponse.next({
 request,
-})
+});
+
+const supabaseUrl =
+process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+const supabaseAnonKey =
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+// ------------------------------------------------------------
+// Supabase configuration check
+// ------------------------------------------------------------
+
+if (!supabaseUrl || !supabaseAnonKey) {
+console.error(
+"AROVIX MIDDLEWARE: Supabase environment variables are missing."
+);
+
+if (pathname.startsWith("/dashboard")) {
+const url = request.nextUrl.clone();
+
+url.pathname = "/login";
+url.searchParams.set(
+"error",
+"server_configuration_error"
+);
+
+return NextResponse.redirect(url);
+}
+
+return supabaseResponse;
+}
 
 const supabase = createServerClient(
-'https://srowvekjljygehaeeyas.supabase.co',
-'sb_publishable_R1FPIKK4Mb6r-WCcFCnZng_DdcOy1Sc', // ضع مفتاحك الكامل هنا كما فعلنا في ملف الـ client
+supabaseUrl,
+supabaseAnonKey,
 {
 cookies: {
 getAll() {
-return request.cookies.getAll()
+return request.cookies.getAll();
 },
+
 setAll(cookiesToSet) {
-cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
-supabaseResponse = NextResponse.next({
+cookiesToSet.forEach(
+({ name, value }) => {
+request.cookies.set(
+name,
+value
+);
+}
+);
+
+supabaseResponse =
+NextResponse.next({
 request,
-})
-cookiesToSet.forEach(({ name, value, options }) =>
-supabaseResponse.cookies.set(name, value, options)
-)
+});
+
+cookiesToSet.forEach(
+({ name, value, options }) => {
+supabaseResponse.cookies.set(
+name,
+value,
+options
+);
+}
+);
 },
 },
 }
-)
+);
 
-// تحديث الجلسة لتجنب انتهاء صلاحيتها
+// ============================================================
+// 1. PUBLIC ROUTES
+// ============================================================
+
+const isPublicRoute =
+pathname === "/login" ||
+pathname.startsWith("/auth/") ||
+pathname.startsWith("/api/");
+
+if (isPublicRoute) {
+return supabaseResponse;
+}
+
+// ============================================================
+// 2. ONLY DASHBOARD ROUTES REQUIRE AUTHENTICATION
+// ============================================================
+
+if (!pathname.startsWith("/dashboard")) {
+return supabaseResponse;
+}
+
+// ============================================================
+// 3. GET AUTHENTICATED USER
+// ============================================================
+
 const {
 data: { user },
-} = await supabase.auth.getUser()
+error: userError,
+} = await supabase.auth.getUser();
 
-// حماية المسارات: إذا لم يكن مسجل دخول وحاول دخول الداشبورد، يتم تحويله لصفحة تسجيل الدخول
-if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
-const url = request.nextUrl.clone()
-url.pathname = '/login'
-return NextResponse.redirect(url)
+if (userError || !user) {
+console.log(
+"AROVIX MIDDLEWARE: No authenticated user."
+);
+
+const url = request.nextUrl.clone();
+
+url.pathname = "/login";
+url.searchParams.set(
+"error",
+"unauthorized"
+);
+
+return NextResponse.redirect(url);
 }
 
-return supabaseResponse
+// ============================================================
+// 4. GET USER PROFILE
+// ============================================================
+
+const {
+data: profile,
+error: profileError,
+} = await supabase
+.from("profiles")
+.select(
+"id, role, status, agent_id, partner_id, shop_id"
+)
+.eq("id", user.id)
+.maybeSingle();
+
+if (profileError || !profile) {
+console.error(
+"AROVIX MIDDLEWARE: Profile lookup failed:",
+profileError
+);
+
+const url = request.nextUrl.clone();
+
+url.pathname = "/login";
+url.searchParams.set(
+"error",
+"profile_not_found"
+);
+
+return NextResponse.redirect(url);
+}
+
+// ============================================================
+// 5. NORMALIZE ROLE / STATUS
+// ============================================================
+
+const role = String(
+profile.role || ""
+)
+.trim()
+.toLowerCase();
+
+const status = String(
+profile.status || ""
+)
+.trim()
+.toLowerCase();
+
+console.log(
+"AROVIX MIDDLEWARE USER:",
+user.email,
+"ROLE:",
+role,
+"STATUS:",
+status
+);
+
+// ============================================================
+// 6. BLOCK INACTIVE ACCOUNTS
+// ============================================================
+
+if (
+status === "inactive" ||
+status === "suspended" ||
+status === "blocked" ||
+status === "disabled"
+) {
+const url = request.nextUrl.clone();
+
+url.pathname = "/login";
+url.searchParams.set(
+"error",
+"account_inactive"
+);
+
+return NextResponse.redirect(url);
+}
+
+// ============================================================
+// 7. DETERMINE THE ONLY DASHBOARD THIS USER CAN ACCESS
+// ============================================================
+
+let allowedDashboard: string | null =
+null;
+
+if (role === "admin") {
+allowedDashboard =
+"/dashboard/admin";
+}
+
+if (role === "agent") {
+allowedDashboard =
+"/dashboard/agent";
+}
+
+if (
+role === "partner" ||
+role === "agency"
+) {
+allowedDashboard =
+"/dashboard/agency";
+}
+
+// ============================================================
+// 8. INVALID ROLE
+// ============================================================
+
+if (!allowedDashboard) {
+const url = request.nextUrl.clone();
+
+url.pathname = "/login";
+url.searchParams.set(
+"error",
+"invalid_role"
+);
+
+return NextResponse.redirect(url);
+}
+
+// ============================================================
+// 9. GENERIC /dashboard
+// ============================================================
+
+if (
+pathname === "/dashboard" ||
+pathname === "/dashboard/"
+) {
+return NextResponse.redirect(
+new URL(
+allowedDashboard,
+request.url
+)
+);
+}
+
+// ============================================================
+// 10. ADMIN DASHBOARD
+// ============================================================
+
+if (
+pathname.startsWith(
+"/dashboard/admin"
+)
+) {
+if (role !== "admin") {
+return NextResponse.redirect(
+new URL(
+allowedDashboard,
+request.url
+)
+);
+}
+
+return supabaseResponse;
+}
+
+// ============================================================
+// 11. AGENT DASHBOARD
+// ============================================================
+
+if (
+pathname.startsWith(
+"/dashboard/agent"
+)
+) {
+if (role !== "agent") {
+return NextResponse.redirect(
+new URL(
+allowedDashboard,
+request.url
+)
+);
+}
+
+if (!profile.agent_id) {
+const url =
+request.nextUrl.clone();
+
+url.pathname = "/login";
+url.searchParams.set(
+"error",
+"agent_not_configured"
+);
+
+return NextResponse.redirect(url);
+}
+
+return supabaseResponse;
+}
+
+// ============================================================
+// 12. AGENCY / PARTNER DASHBOARD
+// ============================================================
+
+if (
+pathname.startsWith(
+"/dashboard/agency"
+)
+) {
+if (
+role !== "partner" &&
+role !== "agency"
+) {
+return NextResponse.redirect(
+new URL(
+allowedDashboard,
+request.url
+)
+);
+}
+
+if (!profile.partner_id) {
+const url =
+request.nextUrl.clone();
+
+url.pathname = "/login";
+url.searchParams.set(
+"error",
+"partner_not_configured"
+);
+
+return NextResponse.redirect(url);
+}
+
+return supabaseResponse;
+}
+
+// ============================================================
+// 13. UNKNOWN DASHBOARD PATH
+// ============================================================
+
+return NextResponse.redirect(
+new URL(
+allowedDashboard,
+request.url
+)
+);
 }
 
 export const config = {
 matcher: [
-'/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+"/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
 ],
-}
-
+};
