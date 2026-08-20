@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
 const requestUrl = new URL(request.url);
-const code = requestUrl.searchParams.get("code");
+
 const tokenHash = requestUrl.searchParams.get("token_hash");
 const type = requestUrl.searchParams.get("type");
 
@@ -22,11 +22,14 @@ cookies: {
 getAll() {
 return cookieStore.getAll();
 },
+
 setAll(cookiesToSet) {
 try {
-cookiesToSet.forEach(({ name, value, options }) => {
+cookiesToSet.forEach(
+({ name, value, options }) => {
 cookieStore.set(name, value, options);
-});
+}
+);
 } catch {
 // Ignore cookie errors when headers have already been prepared.
 }
@@ -35,36 +38,10 @@ cookieStore.set(name, value, options);
 }
 );
 
-/*
-* PKCE flow
-*
-* Password recovery links can arrive with ?code=...
-* Exchange the code for a Supabase session first.
-*/
-if (code) {
-const { error } =
-await supabase.auth.exchangeCodeForSession(code);
+// ============================================================
+// INVITATION FLOW
+// ============================================================
 
-if (error) {
-console.error("Auth callback code exchange error:", error);
-
-return NextResponse.redirect(
-`${siteUrl}/login?error=invalid-or-expired-link`
-);
-}
-
-/*
-* We now have the authenticated recovery session.
-* Send the user to the password update page.
-*/
-return NextResponse.redirect(
-`${siteUrl}/update-password`
-);
-}
-
-/*
-* Invitation flow
-*/
 if (tokenHash && type === "invite") {
 const { error } = await supabase.auth.verifyOtp({
 token_hash: tokenHash,
@@ -73,7 +50,7 @@ type: "invite",
 
 if (error) {
 console.error(
-"Invitation verification error:",
+"AROVIX INVITATION VERIFICATION ERROR:",
 error
 );
 
@@ -87,9 +64,36 @@ return NextResponse.redirect(
 );
 }
 
-/*
-* Anything else is invalid.
-*/
+// ============================================================
+// PASSWORD RECOVERY FLOW
+// ============================================================
+
+if (tokenHash && type === "recovery") {
+const { error } = await supabase.auth.verifyOtp({
+token_hash: tokenHash,
+type: "recovery",
+});
+
+if (error) {
+console.error(
+"AROVIX RECOVERY VERIFICATION ERROR:",
+error
+);
+
+return NextResponse.redirect(
+`${siteUrl}/login?error=invalid-or-expired-link`
+);
+}
+
+return NextResponse.redirect(
+`${siteUrl}/login?mode=set-password`
+);
+}
+
+// ============================================================
+// INVALID AUTH CALLBACK
+// ============================================================
+
 return NextResponse.redirect(
 `${siteUrl}/login?error=invalid-auth-link`
 );
