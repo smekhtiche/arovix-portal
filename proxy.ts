@@ -38,12 +38,11 @@ request.url
 );
 }
 
-/*
-* Browser/session client.
-*
-* This client is used ONLY to identify the authenticated
-* Supabase user from the user's session cookies.
-*/
+// ============================================================
+// SUPABASE SERVER CLIENT
+// Used to read the authenticated user's session from cookies.
+// ============================================================
+
 const supabase = createServerClient(
 supabaseUrl,
 supabaseAnonKey,
@@ -91,10 +90,16 @@ request.nextUrl.pathname;
 
 // ============================================================
 // 1. PUBLIC ROUTES
+//
+// These routes must NEVER require a profile or dashboard role.
+// This is important for Login, Forgot Password, Set Password,
+// Auth Callback and API routes.
 // ============================================================
 
 const isPublicRoute =
 pathname === "/login" ||
+pathname === "/forgot-password" ||
+pathname === "/update-password" ||
 pathname.startsWith("/auth/") ||
 pathname.startsWith("/api/");
 
@@ -143,15 +148,12 @@ return NextResponse.redirect(url);
 }
 
 // ============================================================
-// 5. ADMIN DATABASE CLIENT
+// 5. ADMIN SUPABASE CLIENT
 //
-// IMPORTANT:
-// The profile lookup is performed with the Supabase
-// Service Role Key so RLS on profiles cannot incorrectly
-// make an existing profile appear to be missing.
+// Service Role is SERVER-SIDE ONLY.
 //
-// This key is SERVER-SIDE ONLY and is never exposed to
-// the browser.
+// It is used here only to read the profile by the Auth UID,
+// preventing RLS from incorrectly returning "profile not found".
 // ============================================================
 
 const supabaseAdmin =
@@ -168,6 +170,10 @@ persistSession: false,
 
 // ============================================================
 // 6. GET PROFILE BY AUTH USER UID
+//
+// IMPORTANT:
+// profiles.id MUST equal auth.users.id.
+// We do NOT search by email.
 // ============================================================
 
 const {
@@ -412,6 +418,10 @@ request.url
 )
 );
 }
+
+// ============================================================
+// MATCHER
+// ============================================================
 
 export const config = {
 matcher: [
