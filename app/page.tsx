@@ -26,10 +26,14 @@ password,
 });
 
 if (authError) {
-throw new Error(authError.message);
-}
-
-window.location.replace("/dashboard/admin");
+    throw new Error(authError.message);
+    }
+    
+    console.log(
+    "SESSION AFTER LOGIN:",
+    await supabase.auth.getSession()
+    );
+    // window.location.replace("/dashboard/admin");
 } catch (err: any) {
 setError(err?.message || "Failed to sign in. Please try again.");
 setLoading(false);
