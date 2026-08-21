@@ -139,15 +139,22 @@ export default function LoginPage() {
 
       if (!user) {
         throw new Error(
-          "Unable to retrieve your user account."
+        "Unable to retrieve your user account."
         );
-      }
-
-      // Authentication succeeded.
-      // Dashboard authorization is handled server-side
-      // by proxy.ts using the authenticated user's UID.
-
-      window.location.replace("/dashboard");
+        }
+        
+        const {
+        data: { session },
+        } = await supabase.auth.getSession();
+        
+        console.log(
+        "AROVIX LOGIN SESSION:",
+        session
+        );
+        
+        // TEMPORARILY DISABLED FOR DEBUGGING
+        // window.location.replace("/dashboard");
+        
     } catch (err: any) {
       console.error("Login error:", err);
 
